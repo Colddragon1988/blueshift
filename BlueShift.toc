@@ -1,0 +1,12 @@
+## Interface: 16001
+## Title: BlueShift
+## Notes: Moves the blue Battle.net notifications (friend online, broadcasts, ...) wherever you want and locks them there. /blueshift unlocks and locks the position.
+## Notes-deDE: Verschiebt die blauen Battle.net-Benachrichtigungen (Freund online, Rundnachrichten, ...) an eine beliebige Stelle und fixiert sie dort. /blueshift entsperrt und fixiert die Position.
+## Author: Chenmo
+## Version: 1.0
+## IconTexture: Interface\FriendsFrame\Battlenet-Portrait
+## Category: User Interface
+## Category-deDE: Benutzerinterface
+## SavedVariables: BlueShiftDB
+
+BlueShift.lua
