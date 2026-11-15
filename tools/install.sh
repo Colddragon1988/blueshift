@@ -19,6 +19,7 @@ if [ -e "$dest" ] && [ ! -f "$dest/BlueShift.toc" ]; then
 fi
 
 rm -rf "$dest"
-mkdir -p "$dest"
+mkdir -p "$dest/Media"
 cp "$src/BlueShift.toc" "$src/BlueShift.lua" "$dest/"
+cp "$src/Media/Icon.tga" "$dest/Media/"
 echo "Installed BlueShift $(sed -n 's/^## Version: //p' "$src/BlueShift.toc") to $dest"
