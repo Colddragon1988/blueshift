@@ -1,62 +1,91 @@
--- BlueShift: puts the blue Battle.net notifications (BNToastFrame: friend online or offline,
--- broadcasts, friend requests) where the user wants them and keeps them there.
+-- BlueShift: puts the blue notifications (Battle.net toasts such as friend online or offline,
+-- broadcasts and friend requests, the voice chat prompts, the play time alert and the layer
+-- change warning) where the user wants them and keeps them there.
 --
--- Blizzard anchors the toast above the chat frame every time it lays out its chat alerts.
--- A hook on the toast's SetPoint moves it to the saved position right afterwards. Unlocked,
--- a stand-in of the toast's size can be dragged around; where it is dropped becomes the
--- position, saved in BlueShiftDB.pos as the offset of the bottom left corner on the screen.
+-- Blizzard stacks the toasts above the chat frame every time it lays out its chat alerts.
+-- A hook on that layout moves the lowest visible blue one to the saved position right
+-- afterwards; the others stay stacked on it. The layer change warning is not part of that
+-- stack: Blizzard anchors it once, so it has a position of its own. Unlocked, a stand-in for
+-- each of the two can be dragged around; where it is dropped becomes the position, saved in
+-- BlueShiftDB.pos and BlueShiftDB.layerPos as the offset of the bottom left corner on the screen.
 
 local ADDON = ...
 
 -- English everywhere, German on German clients
 local L = {
-	MOVER_TITLE = "Battle.net notifications",
+	MOVER_TITLE = "Blue notifications",
+	MOVER_LAYER = "Layer change warning",
 	MOVER_HINT = "Drag to move, right click to lock",
-	UNLOCKED = "Position unlocked. Drag the blue box to where the notifications should appear, then right click it or type /blueshift to lock it.",
-	LOCKED = "Position locked.",
-	RESET = "Position reset. The notifications appear above the chat again.",
+	UNLOCKED = "Positions unlocked. Drag the two blue boxes to where the notifications and the layer change warning should appear, then right click one or type /blueshift to lock them.",
+	LOCKED = "Positions locked.",
+	RESET = "Positions reset. The notifications appear above the chat again.",
 	USAGE = "/blueshift (unlock or lock) | unlock | lock | reset",
-	OPT_HEADER = "Position of the Battle.net notifications",
-	OPT_UNLOCK = "Unlock position",
-	OPT_UNLOCK_TIP = "Shows a blue box where the Battle.net notifications appear (friend online, broadcasts, friend requests). Close the options and drag the box to the place you want. Uncheck this, or right click the box, to lock the position.",
-	OPT_RESET = "Default position",
+	OPT_HEADER = "Position of the blue notifications",
+	OPT_UNLOCK = "Unlock positions",
+	OPT_UNLOCK_TIP = "Shows two blue boxes: one where the blue notifications appear (friend online, broadcasts, friend requests), one for the layer change warning. Close the options and drag each box to the place you want. Uncheck this, or right click a box, to lock the positions.",
+	OPT_RESET = "Default positions",
 	OPT_RESET_BUTTON = "Reset",
-	OPT_RESET_TIP = "Puts the notifications back above the chat, where the game shows them by default.",
+	OPT_RESET_TIP = "Puts the notifications and the layer change warning back above the chat, where the game shows them by default.",
 }
 if GetLocale() == "deDE" then
-	L.MOVER_TITLE = "Battle.net-Benachrichtigungen"
+	L.MOVER_TITLE = "Blaue Benachrichtigungen"
+	L.MOVER_LAYER = "Hinweis auf Layer-Wechsel"
 	L.MOVER_HINT = "Ziehen zum Verschieben, Rechtsklick fixiert"
-	L.UNLOCKED = "Position entsperrt. Zieh den blauen Kasten dorthin, wo die Benachrichtigungen erscheinen sollen, und fixiere ihn mit Rechtsklick oder /blueshift."
-	L.LOCKED = "Position fixiert."
-	L.RESET = "Position zurückgesetzt. Die Benachrichtigungen erscheinen wieder über dem Chat."
+	L.UNLOCKED = "Positionen entsperrt. Zieh die beiden blauen Kästen dorthin, wo die Benachrichtigungen und der Hinweis auf den Layer-Wechsel erscheinen sollen, und fixiere sie mit Rechtsklick oder /blueshift."
+	L.LOCKED = "Positionen fixiert."
+	L.RESET = "Positionen zurückgesetzt. Die Benachrichtigungen erscheinen wieder über dem Chat."
 	L.USAGE = "/blueshift (entsperren oder fixieren) | unlock | lock | reset"
-	L.OPT_HEADER = "Position der Battle.net-Benachrichtigungen"
-	L.OPT_UNLOCK = "Position entsperren"
-	L.OPT_UNLOCK_TIP = "Zeigt einen blauen Kasten an der Stelle, an der die Battle.net-Benachrichtigungen erscheinen (Freund online, Rundnachrichten, Freundschaftsanfragen). Schließ die Optionen und zieh den Kasten an die gewünschte Stelle. Nimm den Haken wieder heraus oder klick mit rechts auf den Kasten, um die Position zu fixieren."
-	L.OPT_RESET = "Standardposition"
+	L.OPT_HEADER = "Position der blauen Benachrichtigungen"
+	L.OPT_UNLOCK = "Positionen entsperren"
+	L.OPT_UNLOCK_TIP = "Zeigt zwei blaue Kästen: einen an der Stelle, an der die blauen Benachrichtigungen erscheinen (Freund online, Rundnachrichten, Freundschaftsanfragen), einen für den Hinweis auf den Layer-Wechsel. Schließ die Optionen und zieh jeden Kasten an die gewünschte Stelle. Nimm den Haken wieder heraus oder klick mit rechts auf einen Kasten, um die Positionen zu fixieren."
+	L.OPT_RESET = "Standardpositionen"
 	L.OPT_RESET_BUTTON = "Zurücksetzen"
-	L.OPT_RESET_TIP = "Setzt die Benachrichtigungen zurück über den Chat, wo das Spiel sie von sich aus zeigt."
+	L.OPT_RESET_TIP = "Setzt die Benachrichtigungen und den Hinweis auf den Layer-Wechsel zurück über den Chat, wo das Spiel sie von sich aus zeigt."
 end
 
-local db -- BlueShiftDB: pos = { x, y } of the toast's bottom left corner, nil for Blizzard's place
-local mover
-local applying = false
+-- The blue toasts in Blizzard's chat alert stack, lowest first
+local TOASTS = {
+	"BNToastFrame",
+	"TimeAlertFrame",
+	"VoiceChatPromptActivateChannel",
+	"VoiceChatChannelActivatedNotification",
+}
+-- Where Blizzard anchors the layer change warning, relative to the top left of ChatAlertFrame
+local LAYER_DEFAULT_X, LAYER_DEFAULT_Y = 30, 55
+-- Its minimize button hangs out to the left of it (24 wide, 5 apart)
+local LAYER_MIN_X = 29
+
+-- BlueShiftDB: pos and layerPos = { x, y } of the bottom left corner of the toasts and of the
+-- layer change warning, nil for Blizzard's place
+local db
+local mover, layerMover
 
 local function Print(text)
 	DEFAULT_CHAT_FRAME:AddMessage("|cff82c5ffBlueShift:|r " .. text)
 end
 
+-- Keeps it on screen when the resolution or the UI scale has changed since the position was saved
+local function Place(frame, pos, minX)
+	local x = math.max(minX or 0, math.min(pos.x, UIParent:GetWidth() - frame:GetWidth()))
+	local y = math.max(0, math.min(pos.y, UIParent:GetHeight() - frame:GetHeight()))
+	frame:ClearAllPoints()
+	frame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y)
+end
+
 local function ApplyPosition()
-	if not db.pos or not BNToastFrame then
-		return
+	if db.pos then
+		-- Blizzard has anchored every other visible toast onto the one below it
+		for _, name in ipairs(TOASTS) do
+			local toast = _G[name]
+			if toast and toast:IsShown() then
+				Place(toast, db.pos)
+				break
+			end
+		end
 	end
-	-- Keep it on screen when the resolution or the UI scale has changed since it was saved
-	local x = math.max(0, math.min(db.pos.x, UIParent:GetWidth() - BNToastFrame:GetWidth()))
-	local y = math.max(0, math.min(db.pos.y, UIParent:GetHeight() - BNToastFrame:GetHeight()))
-	applying = true
-	BNToastFrame:ClearAllPoints()
-	BNToastFrame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y)
-	applying = false
+	if db.layerPos and ShardTransferImminentFrame then
+		Place(ShardTransferImminentFrame, db.layerPos, LAYER_MIN_X)
+	end
 end
 
 local function IsUnlocked()
@@ -73,14 +102,24 @@ end
 local function Lock()
 	if IsUnlocked() then
 		mover:Hide()
+		layerMover:Hide()
 		UpdateOptions()
 		Print(L.LOCKED)
 	end
 end
 
--- The stand-in looks like the toast (same size and backdrop) and saves where it is dropped
-local function CreateMover()
-	local frame = CreateFrame("Frame", "BlueShiftMover", UIParent, "BackdropTemplate")
+-- The stand-in moved last lies on top of the other and hides what it covers of it. That takes
+-- different frame levels: on the same level the texts of both would be drawn over both boxes.
+local function BringToFront(frame)
+	for _, other in ipairs({ mover, layerMover }) do
+		other:SetFrameLevel(other == frame and 20 or 10)
+	end
+end
+
+-- A stand-in looks like the toast (same size and backdrop) and saves where it is dropped
+-- under the given key of the saved variables
+local function CreateMover(name, title, key, minX)
+	local frame = CreateFrame("Frame", name, UIParent, "BackdropTemplate")
 	frame:SetSize(250, 50)
 	frame:SetFrameStrata("DIALOG")
 	frame:SetBackdrop(BACKDROP_TOAST_12_12)
@@ -88,19 +127,30 @@ local function CreateMover()
 	frame:SetMovable(true)
 	frame:EnableMouse(true)
 	frame:RegisterForDrag("LeftButton")
-	local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	title:SetPoint("TOP", 0, -10)
-	title:SetTextColor(0.51, 0.773, 1)
-	title:SetText(L.MOVER_TITLE)
+	-- Opaque, so that where the two stand-ins overlap only the upper one is seen
+	local fill = frame:CreateTexture(nil, "BACKGROUND")
+	fill:SetPoint("TOPLEFT", 3, -3)
+	fill:SetPoint("BOTTOMRIGHT", -3, 3)
+	fill:SetColorTexture(0.02, 0.05, 0.12, 1)
+	local text = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	text:SetPoint("TOP", 0, -10)
+	text:SetTextColor(0.51, 0.773, 1)
+	text:SetText(title)
 	local hint = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	hint:SetPoint("BOTTOM", 0, 10)
 	hint:SetText(L.MOVER_HINT)
-	frame:SetScript("OnDragStart", frame.StartMoving)
+	frame:SetScript("OnDragStart", function(self)
+		BringToFront(self)
+		self:StartMoving()
+	end)
 	frame:SetScript("OnDragStop", function(self)
 		self:StopMovingOrSizing()
 		-- The position is ours to save; keep the client from storing it in its layout cache
 		self:SetUserPlaced(false)
-		db.pos = { x = self:GetLeft(), y = self:GetBottom() }
+		local x, y = math.max(minX or 0, self:GetLeft()), self:GetBottom()
+		db[key] = { x = x, y = y }
+		self:ClearAllPoints()
+		self:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y)
 		ApplyPosition()
 	end)
 	frame:SetScript("OnMouseUp", function(_, button)
@@ -111,34 +161,54 @@ local function CreateMover()
 	return frame
 end
 
+-- A stand-in starts at the saved position or else where Blizzard shows the real thing
+local function ShowMover(frame, pos, x, y)
+	frame:ClearAllPoints()
+	if pos then
+		frame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", pos.x, pos.y)
+	elseif x and y then
+		frame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x, y)
+	else
+		frame:SetPoint("CENTER")
+	end
+	frame:Show()
+end
+
 local function Unlock()
 	if IsUnlocked() then
 		return
 	end
-	mover = mover or CreateMover()
-	mover:ClearAllPoints()
-	if db.pos then
-		mover:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", db.pos.x, db.pos.y)
-	elseif ChatAlertFrame and ChatAlertFrame:GetLeft() then
-		-- Where Blizzard's layout starts
-		mover:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", ChatAlertFrame:GetLeft(), ChatAlertFrame:GetBottom())
-	else
-		mover:SetPoint("CENTER")
+	mover = mover or CreateMover("BlueShiftMover", L.MOVER_TITLE, "pos")
+	if not layerMover then
+		layerMover = CreateMover("BlueShiftLayerMover", L.MOVER_LAYER, "layerPos", LAYER_MIN_X)
+		BringToFront(layerMover)
 	end
-	mover:Show()
+	local left, bottom, top
+	if ChatAlertFrame and ChatAlertFrame:GetLeft() then
+		left, bottom, top = ChatAlertFrame:GetLeft(), ChatAlertFrame:GetBottom(), ChatAlertFrame:GetTop()
+	end
+	ShowMover(mover, db.pos, left, bottom)
+	ShowMover(layerMover, db.layerPos, left and left + LAYER_DEFAULT_X, top and top + LAYER_DEFAULT_Y)
 	UpdateOptions()
 	Print(L.UNLOCKED)
 end
 
 local function Reset()
 	db.pos = nil
+	db.layerPos = nil
 	if mover then
 		mover:Hide()
+		layerMover:Hide()
 		UpdateOptions()
 	end
-	-- Blizzard lays the toast out again, now without our correction
+	-- Blizzard lays the toasts out again, now without our correction
 	if ChatAlertFrame then
 		ChatAlertFrame:UpdateAnchors()
+		if ShardTransferImminentFrame then
+			-- Anchored only once by Blizzard, when it loads
+			ShardTransferImminentFrame:ClearAllPoints()
+			ShardTransferImminentFrame:SetPoint("BOTTOMLEFT", ChatAlertFrame, "TOPLEFT", LAYER_DEFAULT_X, LAYER_DEFAULT_Y)
+		end
 	end
 	Print(L.RESET)
 end
@@ -193,21 +263,20 @@ events:SetScript("OnEvent", function(self, event, arg1)
 				BlueShiftDB = {}
 			end
 			db = BlueShiftDB
-			if type(db.pos) ~= "table" or type(db.pos.x) ~= "number" or type(db.pos.y) ~= "number" then
-				db.pos = nil
+			for _, key in ipairs({ "pos", "layerPos" }) do
+				local pos = db[key]
+				if type(pos) ~= "table" or type(pos.x) ~= "number" or type(pos.y) ~= "number" then
+					db[key] = nil
+				end
 			end
 			if Settings and Settings.RegisterProxySetting then
 				RegisterOptions()
 			end
 		end
 	elseif event == "PLAYER_LOGIN" then
-		if BNToastFrame then
-			-- Runs after every anchoring by Blizzard; our own SetPoint must not loop
-			hooksecurefunc(BNToastFrame, "SetPoint", function()
-				if not applying then
-					ApplyPosition()
-				end
-			end)
+		if ChatAlertFrame then
+			-- Runs after every layout by Blizzard, which happens whenever a toast shows or hides
+			hooksecurefunc(ChatAlertFrame, "UpdateAnchors", ApplyPosition)
 			ApplyPosition()
 		end
 	end
